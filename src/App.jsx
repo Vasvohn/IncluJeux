@@ -1,58 +1,83 @@
 import { useEffect, useRef, useState } from "react"
-import { phrases, shuffleTheme } from "./themes.js"
-import { speak, speakAll } from "./speech.js"
-
-const phraseColors = [
-  "bg-blue-700 hover:bg-blue-600 border-blue-400",
-  "bg-green-700 hover:bg-green-600 border-green-400",
-  "bg-purple-700 hover:bg-purple-600 border-purple-400",
-  "bg-rose-700 hover:bg-rose-600 border-rose-400",
-  "bg-pink-700 hover:bg-pink-600 border-pink-400",
-  "bg-amber-700 hover:bg-amber-600 border-amber-400",
-]
+import { phrases, makeDeck } from "./themes.js"
+import { speak } from "./speech.js"
 
 const SPEEDS = [
-  { value: 3500, label: "Lente (3.5s)" },
-  { value: 2500, label: "Normale (2.5s)" },
-  { value: 1500, label: "Rapide (1.5s)" },
+  { value: 4500, label: "Lente" },
+  { value: 3000, label: "Normale" },
+  { value: 1800, label: "Rapide" },
 ]
 
-const THEME_BUTTONS = [
-  { key: "animaux", label: "🐱 Animaux" },
-  { key: "transports", label: "🚗 Transports" },
-  { key: "musique", label: "🎵 Musique" },
+const THEMES = [
+  { key: "animaux", label: "Animaux" },
+  { key: "transports", label: "Transports" },
+  { key: "musique", label: "Musique" },
 ]
 
-function cardAnnouncement(card, faceUp, found) {
-  if (found) return `Trouvé : ${card.name}`
-  if (faceUp) return card.name
-  return "Carte masquée"
+const PAIR_CHOICES = [
+  { value: 2, label: "4 cartes" },
+  { value: 4, label: "8 cartes" },
+]
+
+function playItems(cards, flipped, matched) {
+  const items = []
+  cards.forEach((card, index) => {
+    if (matched.includes(index)) return
+    const faceUp = flipped.includes(index)
+    items.push({
+      type: "card",
+      index,
+      scanSpeech: faceUp ? card.name : `Carte ${index + 1}`,
+      banner: faceUp ? `${card.icon} ${card.name}` : `Carte ${index + 1}`,
+    })
+  })
+  items.push({ type: "talk", scanSpeech: "Parler", banner: "Parler" })
+  return items
+}
+
+function talkItems() {
+  const items = phrases.map((phrase) => ({
+    type: "phrase",
+    phrase,
+    scanSpeech: phrase.speech,
+    banner: phrase.label,
+  }))
+  items.push({ type: "back", scanSpeech: "Retour au jeu", banner: "Retour au jeu" })
+  return items
 }
 
 export default function App() {
   const [themeKey, setThemeKey] = useState("animaux")
-  const [cards, setCards] = useState(() => shuffleTheme("animaux"))
+  const [pairCount, setPairCount] = useState(2)
+  const [cards, setCards] = useState(() => makeDeck("animaux", 2))
   const [flipped, setFlipped] = useState([])
   const [matched, setMatched] = useState([])
+  const [mode, setMode] = useState("play")
   const [scanIndex, setScanIndex] = useState(0)
-  const [scanSpeed, setScanSpeed] = useState(2500)
-  const [scanEpoch, setScanEpoch] = useState(0)
+  const [scanSpeed, setScanSpeed] = useState(4500)
+  const [paused, setPaused] = useState(false)
 
   const cardsRef = useRef(cards)
   const flippedRef = useRef(flipped)
   const matchedRef = useRef(matched)
-  const scanIndexRef = useRef(scanIndex)
-  const lockRef = useRef(false)
+  const modeRef = useRef(mode)
+  const scanIndexRef = useRef(0)
+  const pausedRef = useRef(false)
   const timersRef = useRef([])
-  const holdSpeech = useRef(false)
+  const lastSwitchRef = useRef(0)
+  const activateRef = useRef(() => {})
+  const themeRef = useRef(themeKey)
+  const pairsRef = useRef(pairCount)
 
   cardsRef.current = cards
   flippedRef.current = flipped
   matchedRef.current = matched
-  scanIndexRef.current = scanIndex
+  modeRef.current = mode
+  themeRef.current = themeKey
+  pairsRef.current = pairCount
 
-  const total = phrases.length + cards.length
-  const activeIndex = total ? scanIndex % total : 0
+  const items = mode === "talk" ? talkItems() : mode === "win" ? [] : playItems(cards, flipped, matched)
+  const active = items.length ? items[scanIndex % items.length] : null
 
   function clearTimers() {
     timersRef.current.forEach(clearTimeout)
@@ -64,209 +89,319 @@ export default function App() {
     timersRef.current.push(id)
   }
 
-  function startGame(nextTheme) {
+  function currentItems() {
+    if (modeRef.current === "talk") return talkItems()
+    if (modeRef.current === "win") return []
+    return playItems(cardsRef.current, flippedRef.current, matchedRef.current)
+  }
+
+  function announce(index = scanIndexRef.current) {
+    const list = currentItems()
+    if (!list.length) return
+    const item = list[index % list.length]
+    if (item) speak(item.scanSpeech)
+  }
+
+  function hold(ms, done) {
+    pausedRef.current = true
+    setPaused(true)
+    later(() => {
+      if (done) done()
+      if (modeRef.current === "win") return
+      pausedRef.current = false
+      setPaused(false)
+      later(() => {
+        if (pausedRef.current || modeRef.current === "win") return
+        announce()
+      }, 1700)
+    }, ms)
+  }
+
+  function startGame(nextTheme = themeRef.current, nextPairs = pairsRef.current) {
     clearTimers()
-    lockRef.current = false
-    const deck = shuffleTheme(nextTheme)
+    pausedRef.current = false
+    const deck = makeDeck(nextTheme, nextPairs)
     cardsRef.current = deck
     flippedRef.current = []
     matchedRef.current = []
+    modeRef.current = "play"
     scanIndexRef.current = 0
+    themeRef.current = nextTheme
+    pairsRef.current = nextPairs
     setThemeKey(nextTheme)
+    setPairCount(nextPairs)
     setCards(deck)
     setFlipped([])
     setMatched([])
+    setMode("play")
     setScanIndex(0)
-    setScanEpoch((n) => n + 1)
+    setPaused(false)
+    speak("Carte 1")
+  }
+
+  function openTalk() {
+    modeRef.current = "talk"
+    scanIndexRef.current = 0
+    setMode("talk")
+    setScanIndex(0)
+    speak(phrases[0].speech)
+  }
+
+  function closeTalk() {
+    modeRef.current = "play"
+    scanIndexRef.current = 0
+    setMode("play")
+    setScanIndex(0)
+    const first = playItems(cardsRef.current, flippedRef.current, matchedRef.current)[0]
+    speak(first ? first.scanSpeech : "Retour au jeu")
   }
 
   function selectCard(index) {
-    if (lockRef.current) return
     const deck = cardsRef.current
     const card = deck[index]
     if (!card) return
+    if (matchedRef.current.includes(index)) return
+    if (flippedRef.current.includes(index)) {
+      speak(card.name)
+      return
+    }
     if (flippedRef.current.length >= 2) return
-    if (flippedRef.current.includes(index) || matchedRef.current.includes(index)) return
 
     const next = [...flippedRef.current, index]
     flippedRef.current = next
     setFlipped(next)
     speak(card.soundText || card.name)
 
-    if (next.length < 2) return
+    if (next.length < 2) {
+      hold(2200)
+      return
+    }
 
-    lockRef.current = true
     const [first, second] = next
-    const a = deck[first]
-    const b = deck[second]
-
-    if (a.name === b.name) {
-      later(() => {
+    const same = deck[first].name === deck[second].name
+    if (same) {
+      hold(1600, () => {
         const updated = [...matchedRef.current, first, second]
         matchedRef.current = updated
         flippedRef.current = []
         setMatched(updated)
         setFlipped([])
-        lockRef.current = false
-        speak(`Bravo ! Paire de ${a.name} trouvée !`)
         if (updated.length === deck.length) {
-          later(() => speak("Félicitations ! La partie est terminée avec succès !"), 1500)
+          modeRef.current = "win"
+          pausedRef.current = true
+          setMode("win")
+          setPaused(true)
+          speak("Bravo ! Tu as gagné !")
+          return
         }
-      }, 800)
+        speak(`Bravo ! ${deck[first].name}`)
+      })
       return
     }
 
-    later(() => {
+    hold(2600, () => {
       flippedRef.current = []
       setFlipped([])
-      lockRef.current = false
-    }, 1800)
+      speak("On recommence")
+    })
   }
 
-  function activateScan() {
-    const deck = cardsRef.current
-    const count = phrases.length + deck.length
-    if (!count) return
-    const index = scanIndexRef.current % count
-    if (index < phrases.length) {
-      speak(phrases[index].text)
+  function activate() {
+    const now = Date.now()
+    if (now - lastSwitchRef.current < 600) return
+    if (pausedRef.current && modeRef.current !== "win") return
+    lastSwitchRef.current = now
+
+    if (modeRef.current === "win") {
+      startGame()
       return
     }
-    selectCard(index - phrases.length)
+
+    const list = currentItems()
+    if (!list.length) return
+    const item = list[scanIndexRef.current % list.length]
+    if (!item) return
+
+    if (item.type === "card") selectCard(item.index)
+    else if (item.type === "talk") openTalk()
+    else if (item.type === "back") closeTalk()
+    else if (item.type === "phrase") {
+      if (item.phrase.text.startsWith("On rejoue")) {
+        pausedRef.current = true
+        setPaused(true)
+        speak(item.phrase.text)
+        later(() => startGame(), 1500)
+        return
+      }
+      speak(item.phrase.text)
+      hold(2400)
+    }
   }
+
+  activateRef.current = activate
 
   useEffect(() => {
     function onKeyDown(event) {
       if (event.code !== "Space" && event.code !== "Enter") return
       event.preventDefault()
-      activateScan()
+      activateRef.current()
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
   useEffect(() => {
-    if (holdSpeech.current) {
-      holdSpeech.current = false
-      return undefined
-    }
-    if (!cards.length) return undefined
-    const index = scanIndex % (phrases.length + cards.length)
-    if (index < phrases.length) {
-      speak(phrases[index].speech)
-      return undefined
-    }
-    const cardIndex = index - phrases.length
-    const card = cards[cardIndex]
-    speak(cardAnnouncement(card, flipped.includes(cardIndex), matched.includes(cardIndex)))
-    return undefined
-  }, [scanIndex, scanEpoch])
-
-  useEffect(() => {
-    if (!cards.length) return undefined
+    if (paused || mode === "win") return undefined
     const id = setInterval(() => {
-      setScanIndex((current) => current + 1)
+      if (pausedRef.current || modeRef.current === "win") return
+      const list = currentItems()
+      if (!list.length) return
+      const next = (scanIndexRef.current + 1) % list.length
+      scanIndexRef.current = next
+      setScanIndex(next)
+      speak(list[next].scanSpeech)
     }, scanSpeed)
     return () => clearInterval(id)
-  }, [scanSpeed, cards])
+  }, [paused, mode, scanSpeed, cards, flipped, matched])
 
-  useEffect(() => () => clearTimers(), [])
+  useEffect(() => {
+    speak("Carte 1")
+    return () => clearTimers()
+  }, [])
+
+  function onSwitch(event) {
+    if (event.target instanceof Element && event.target.closest("[data-caregiver]")) return
+    event.preventDefault()
+    activate()
+  }
+
+  const gridClass =
+    mode === "talk"
+      ? "grid-cols-2 grid-rows-3"
+      : cards.length <= 4
+        ? "grid-cols-2 grid-rows-2"
+        : "grid-cols-2 grid-rows-4 sm:grid-cols-4 sm:grid-rows-2"
 
   return (
-    <div className="bg-slate-900 text-white min-h-screen p-6 flex flex-col justify-between select-none">
-      <header className="text-center mb-4">
-        <h1 className="text-3xl font-extrabold text-yellow-400 mb-2">Jeu de Mémoire & Communication</h1>
-        <p className="text-md text-slate-300 mb-3">
-          Appuyez sur <kbd className="bg-slate-700 px-3 py-1 rounded text-yellow-300 font-bold">ESPACE</kbd> ou{" "}
-          <span className="text-yellow-300 font-bold">CLIQUEZ</span> pour valider la sélection en cours.
+    <div
+      className="h-full w-full overflow-hidden bg-slate-950 text-white flex flex-col select-none"
+      onPointerDown={onSwitch}
+    >
+      <div
+        data-caregiver
+        className="flex flex-wrap items-center justify-center gap-2 px-3 py-2 bg-slate-900 border-b border-slate-800"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Accompagnant</span>
+        {SPEEDS.map((speed) => (
+          <button
+            key={speed.value}
+            type="button"
+            onClick={() => setScanSpeed(speed.value)}
+            className={`px-3 py-1 rounded-full text-sm font-bold ${
+              scanSpeed === speed.value ? "bg-yellow-400 text-slate-950" : "bg-slate-800 text-slate-200"
+            }`}
+          >
+            {speed.label}
+          </button>
+        ))}
+        {THEMES.map((theme) => (
+          <button
+            key={theme.key}
+            type="button"
+            onClick={() => startGame(theme.key, pairCount)}
+            className={`px-3 py-1 rounded-full text-sm font-bold ${
+              themeKey === theme.key ? "bg-yellow-400 text-slate-950" : "bg-slate-800 text-slate-200"
+            }`}
+          >
+            {theme.label}
+          </button>
+        ))}
+        {PAIR_CHOICES.map((choice) => (
+          <button
+            key={choice.value}
+            type="button"
+            onClick={() => startGame(themeKey, choice.value)}
+            className={`px-3 py-1 rounded-full text-sm font-bold ${
+              pairCount === choice.value ? "bg-yellow-400 text-slate-950" : "bg-slate-800 text-slate-200"
+            }`}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="text-center py-2 px-4">
+        <p className="text-4xl sm:text-5xl font-black text-yellow-300 leading-none min-h-12">
+          {mode === "win"
+            ? "Bravo !"
+            : paused && flipped.length
+              ? flipped.map((index) => `${cards[index].icon} ${cards[index].name}`).join("  ")
+              : active
+                ? active.banner
+                : ""}
         </p>
-        <div className="inline-flex items-center bg-slate-800 border border-slate-700 rounded-xl p-2 gap-3 flex-wrap justify-center">
-          <span className="text-sm font-semibold text-slate-300">⏱️ Vitesse du scan :</span>
-          {SPEEDS.map((speed) => (
-            <button
-              key={speed.value}
-              type="button"
-              onClick={() => {
-                setScanSpeed(speed.value)
-                speak("Vitesse modifiée")
-              }}
-              className={`px-3 py-1 rounded text-sm font-bold ${
-                scanSpeed === speed.value ? "bg-yellow-600 hover:bg-yellow-500" : "bg-slate-700 hover:bg-slate-600"
-              }`}
-            >
-              {speed.label}
-            </button>
-          ))}
-        </div>
-      </header>
+      </div>
 
-      <section className="mb-4">
-        <h2 className="text-lg font-bold text-slate-400 mb-2 text-center">Expression & Communication</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 max-w-5xl mx-auto">
-          {phrases.map((phrase, index) => (
-            <button
-              key={phrase.label}
-              type="button"
-              onClick={() => speak(phrase.text)}
-              className={`text-white text-lg font-bold py-3 px-2 rounded-xl shadow-lg border-2 ${phraseColors[index]} ${
-                activeIndex === index ? "scan-highlight" : ""
-              }`}
-            >
-              {phrase.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="mb-4 text-center">
-        <div className="inline-flex gap-2 flex-wrap justify-center">
-          {THEME_BUTTONS.map((theme) => (
-            <button
-              key={theme.key}
-              type="button"
-              onClick={() => {
-                holdSpeech.current = true
-                startGame(theme.key)
-                speakAll([`Thème ${theme.key} sélectionné`, phrases[0].speech])
-              }}
-              className={`px-4 py-1.5 border rounded-lg font-bold text-sm ${
-                themeKey === theme.key
-                  ? "bg-yellow-600 border-yellow-400"
-                  : "bg-slate-800 border-slate-600 hover:bg-slate-700"
-              }`}
-            >
-              {theme.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <main className="flex-grow flex items-center justify-center">
-        <div id="grid" className="grid grid-cols-4 gap-6 max-w-4xl w-full">
-          {cards.map((card, index) => {
-            const faceUp = flipped.includes(index) || matched.includes(index)
-            const found = matched.includes(index)
-            const scanSlot = phrases.length + index
-            return (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => selectCard(index)}
-                className={`border-4 rounded-2xl h-36 text-5xl flex items-center justify-center cursor-pointer shadow-2xl transition-all ${
-                  found
-                    ? "border-green-400 bg-green-950"
-                    : faceUp
-                      ? "bg-blue-900 border-slate-600"
-                      : "bg-slate-800 border-slate-600"
-                } ${activeIndex === scanSlot ? "scan-highlight" : ""}`}
+      <div className={`flex-1 min-h-0 grid gap-3 px-3 ${gridClass}`}>
+        {mode === "talk"
+          ? phrases.map((phrase) => (
+              <div
+                key={phrase.label}
+                className={`rounded-3xl flex items-center justify-center text-center text-3xl sm:text-4xl font-black border-4 border-slate-700 bg-slate-800 ${
+                  active?.type === "phrase" && active.phrase === phrase ? "scan-highlight" : ""
+                }`}
               >
-                <span className="sr-only">{cardAnnouncement(card, faceUp, found)}</span>
-                {faceUp ? card.icon : "❓"}
-              </button>
-            )
-          })}
+                {phrase.label}
+              </div>
+            ))
+          : cards.map((card, index) => {
+              const faceUp = flipped.includes(index) || matched.includes(index) || mode === "win"
+              const found = matched.includes(index) || mode === "win"
+              const selected = active?.type === "card" && active.index === index
+              return (
+                <div
+                  key={card.id}
+                  className={`min-w-0 min-h-0 rounded-3xl flex flex-col items-center justify-center border-4 ${
+                    found
+                      ? "bg-green-800 border-green-300"
+                      : faceUp
+                        ? "bg-blue-800 border-blue-300"
+                        : "bg-slate-800 border-slate-600"
+                  } ${selected ? "scan-highlight" : ""}`}
+                >
+                  <span className="text-6xl sm:text-8xl leading-none">{faceUp ? card.icon : index + 1}</span>
+                  <span className="mt-2 text-2xl sm:text-3xl font-black">
+                    {faceUp ? card.name : "Carte"}
+                  </span>
+                </div>
+              )
+            })}
+      </div>
+
+      {mode !== "win" && mode !== "talk" ? (
+        <div
+          className={`mx-3 mt-3 rounded-3xl py-3 text-center text-3xl font-black border-4 ${
+            active?.type === "talk" ? "scan-highlight border-yellow-200" : "bg-slate-800 border-slate-600"
+          }`}
+        >
+          Parler
         </div>
-      </main>
+      ) : null}
+
+      {mode === "talk" ? (
+        <div
+          className={`mx-3 mt-3 rounded-3xl py-3 text-center text-3xl font-black border-4 ${
+            active?.type === "back" ? "scan-highlight border-yellow-200" : "bg-slate-800 border-slate-600"
+          }`}
+        >
+          Retour au jeu
+        </div>
+      ) : null}
+
+      <div className="m-3 rounded-3xl bg-yellow-400 text-slate-950 text-center text-4xl sm:text-5xl font-black py-5">
+        {mode === "win" ? "REJOUER" : paused ? "REGARDE" : "APPUIE"}
+      </div>
     </div>
   )
 }

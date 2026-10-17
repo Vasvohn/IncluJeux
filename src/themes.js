@@ -28,8 +28,9 @@ export const themes = {
   ],
 }
 
-export function shuffleTheme(themeKey) {
-  const pairs = [...themes[themeKey], ...themes[themeKey]]
+export function makeDeck(themeKey, pairCount) {
+  const chosen = themes[themeKey].slice(0, pairCount)
+  const pairs = [...chosen, ...chosen]
   for (let i = pairs.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1))
     ;[pairs[i], pairs[j]] = [pairs[j], pairs[i]]
